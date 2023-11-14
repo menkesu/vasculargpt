@@ -1,146 +1,73 @@
-# Importing required packages
+# Import necessary libraries
 import streamlit as st
-import openai
-import uuid
-import time
+from langchain.llms import OpenAI
+from langchain.chains import ConversationalRetrievalChain
+from langchain.vectorstores import Pinecone
+from langchain.embeddings import OpenAIEmbeddings
+from langchain.chat_models import ChatOpenAI
+from dotenv import load_dotenv
+load_dotenv()
+# Set up page configuration
+st.set_page_config(page_title="VascularGPT", layout="wide")
 
-from openai import OpenAI
-client = OpenAI()
+# Pinecone index name from the environment variable or Streamlit secrets
+PINECONE_INDEX_NAME = st.secrets.get("PINECONE_INDEX", "vasculargpt")
 
-#MODEL = "gpt-3.5-turbo"
-#MODEL = "gpt-3.5-turbo-0301"
-#MODEL = "gpt-3.5-turbo-0613"
-#MODEL = "gpt-3.5-turbo-1106"
-#MODEL = "gpt-3.5-turbo-16k"
-#MODEL = "gpt-3.5-turbo-16k-0613"
-#MODEL = "gpt-4"
-#MODEL = "gpt-4-0613"
-#MODEL = "gpt-4-0613"
-#MODEL = "gpt-4-32k-0613"
-MODEL = "gpt-4-1106-preview"
-#MODEL = "gpt-4-vision-preview"
+# Sidebar configuration
+st.sidebar.title("VascularGPT")
+st.sidebar.markdown("Ask your vascular-related questions!")
 
-if "session_id" not in st.session_state:
-    st.session_state.session_id = str(uuid.uuid4())
+# Main page layout
+st.title("Welcome to VascularGPT")
+st.markdown("Your AI assistant for vascular knowledge.")
 
-if "run" not in st.session_state:
-    st.session_state.run = {"status": None}
+# Initialize Pinecone retriever
+vectorstore = Pinecone.from_existing_index(PINECONE_INDEX_NAME, OpenAIEmbeddings())
+retriever = vectorstore.as_retriever(search_kwargs={'k': 5})  # Adjust 'k' as needed
 
-if "messages" not in st.session_state:
-    st.session_state.messages = []
+# Initialize LangChain ConversationalRetrievalChain
+conv_chain = ConversationalRetrievalChain.from_llm(
+    ChatOpenAI(),
+    retriever=retriever,
+    return_source_documents=True
+)
 
-if "retry_error" not in st.session_state:
-    st.session_state.retry_error = 0
+# Initialize an empty chat history
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = []
 
-st.set_page_config(page_title="VascluarGPT")
-st.sidebar.title("VascularGPT - Chat with Rutherford")
-st.sidebar.divider()
-st.sidebar.markdown("Developed by Udi Menkes](https://twitter.com/menkesu)", unsafe_allow_html=True)
-st.sidebar.markdown("Current Version: 0.0.1")
-st.sidebar.markdown("Using gpt-4-1106-preview API")
-st.sidebar.markdown(st.session_state.session_id)
-st.sidebar.divider()
+# User input for question
+query_input = st.text_input("Enter your question here:", key="query_input")
 
-if "assistant" not in st.session_state:
-    openai.api_key = st.secrets["OPENAI_API_KEY"]
+# Button to submit the query
+submit_button = st.button("Submit", key="submit_button")
 
-    # Load the previously created assistant
-    st.session_state.assistant = openai.beta.assistants.retrieve(st.secrets["OPENAI_ASSISTANT"])
+# Process query
+if submit_button and query_input:
+    st.write("Processing your question...")  # Removed key parameter
+    
+    # Append the new query to the chat history
+    st.session_state.chat_history.append((query_input, ''))  # Tuple format
+    
+    # Execute the query against the ConversationalRetrievalChain
+    response = conv_chain({
+        'question': query_input, 
+        'chat_history': st.session_state.chat_history
+    })
 
-    # Create a new thread for this session
-    st.session_state.thread = client.beta.threads.create(
-        metadata={
-            'session_id': st.session_state.session_id,
-        }
-    )
- 
-# If the run is completed, display the messages
-elif hasattr(st.session_state.run, 'status') and st.session_state.run.status == "completed":
-    # Retrieve the list of messages
-    st.session_state.messages = client.beta.threads.messages.list(
-        thread_id=st.session_state.thread.id
-    )
+    # Extract the answer
+    answer = response.get('answer', "No answer found.")
 
-    for thread_message in st.session_state.messages.data:
-        for message_content in thread_message.content:
-            # Access the actual text content
-            message_content = message_content.text
-            annotations = message_content.annotations
-            citations = []
-            
-            # Iterate over the annotations and add footnotes
-            for index, annotation in enumerate(annotations):
-                # Replace the text with a footnote
-                message_content.value = message_content.value.replace(annotation.text, f' [{index}]')
-            
-                # Gather citations based on annotation attributes
-                if (file_citation := getattr(annotation, 'file_citation', None)):
-                    cited_file = client.files.retrieve(file_citation.file_id)
-                    citations.append(f'[{index}] {file_citation.quote} from {cited_file.filename}')
-                elif (file_path := getattr(annotation, 'file_path', None)):
-                    cited_file = client.files.retrieve(file_path.file_id)
-                    citations.append(f'[{index}] Click <here> to download {cited_file.filename}')
-                    # Note: File download functionality not implemented above for brevity
+    # Handle source documents
+    source_documents = response.get('source_documents', [])
+    top_source_document = "No source document found."
+    if source_documents:
+        # Assuming source_documents is a list of Document objects
+        top_source_document = getattr(source_documents[0], 'page_content', top_source_document)
 
-            # Add footnotes to the end of the message before displaying to user
-            message_content.value += '\n' + '\n'.join(citations)
+    # Update the last entry in chat history with the response
+    st.session_state.chat_history[-1] = (query_input, answer)
 
-    # Display messages
-    for message in reversed(st.session_state.messages.data):
-        if message.role in ["user", "assistant"]:
-            with st.chat_message(message.role):
-                for content_part in message.content:
-                    message_text = content_part.text.value
-                    st.markdown(message_text)
-
-if prompt := st.chat_input("How can I help you?"):
-    with st.chat_message('user'):
-        st.write(prompt)
-
-    # Add message to the thread
-    st.session_state.messages = client.beta.threads.messages.create(
-        thread_id=st.session_state.thread.id,
-        role="user",
-        content=prompt
-    )
-
-    # Do a run to process the messages in the thread
-    st.session_state.run = client.beta.threads.runs.create(
-        thread_id=st.session_state.thread.id,
-        assistant_id=st.session_state.assistant.id,
-    )
-    if st.session_state.retry_error < 3:
-        time.sleep(1) # Wait 1 second before checking run status
-        st.rerun()
-                    
-# Check if 'run' object has 'status' attribute
-if hasattr(st.session_state.run, 'status'):
-    # Handle the 'running' status
-    if st.session_state.run.status == "running":
-        with st.chat_message('assistant'):
-            st.write("Thinking ......")
-        if st.session_state.retry_error < 3:
-            time.sleep(1)  # Short delay to prevent immediate rerun, adjust as needed
-            st.rerun()
-
-    # Handle the 'failed' status
-    elif st.session_state.run.status == "failed":
-        st.session_state.retry_error += 1
-        with st.chat_message('assistant'):
-            if st.session_state.retry_error < 3:
-                st.write("Run failed, retrying ......")
-                time.sleep(3)  # Longer delay before retrying
-                st.rerun()
-            else:
-                st.error("FAILED: The OpenAI API is currently processing too many requests. Please try again later ......")
-
-    # Handle any status that is not 'completed'
-    elif st.session_state.run.status != "completed":
-        # Attempt to retrieve the run again, possibly redundant if there's no other status but 'running' or 'failed'
-        st.session_state.run = client.beta.threads.runs.retrieve(
-            thread_id=st.session_state.thread.id,
-            run_id=st.session_state.run.id,
-        )
-        if st.session_state.retry_error < 3:
-            time.sleep(3)
-            st.rerun()
+    # Display the response and the top source document
+    st.write("Answer:", answer)  # Removed key parameter
+    st.write("Source (Top Document):", top_source_document)  # Removed key parameter
