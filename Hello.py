@@ -22,7 +22,9 @@ st.markdown("Your AI assistant for vascular knowledge.")
 
 # Initialize Pinecone retriever
 vectorstore = Pinecone.from_existing_index(PINECONE_INDEX_NAME, OpenAIEmbeddings())
-retriever = vectorstore.as_retriever(search_kwargs={'k': 5})  # Adjust 'k' as needed
+#retriever = vectorstore.as_retriever(search_kwargs={'k': 5})  # Adjust 'k' as needed
+retriever = vectorstore.as_retriever(search_type="mmr", search_kwargs={"k": 8})
+
 
 # Initialize LangChain ConversationalRetrievalChain
 conv_chain = ConversationalRetrievalChain.from_llm(
